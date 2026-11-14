@@ -27,7 +27,7 @@ BRONZE_TABLES = {
 # Silver table references
 SILVER_TABLES = {
     "cases_deaths": f"{CATALOG}.{SILVER_SCHEMA}.cases_deaths",
-    "hospital_admissions": f"{CATALOG}.{SILVER_SCHEMA}.hospital_admissions",
+    "hospital_admissions": f"{CATALOG}.{SILVER_SCHEMA}.hospital_admission",
     "country_lookup": f"{CATALOG}.{SILVER_SCHEMA}.country_lookup",
     "population_by_age": f"{CATALOG}.{SILVER_SCHEMA}.population_by_age",
 }
