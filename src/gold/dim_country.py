@@ -1,5 +1,5 @@
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from src.common.config import GOLD_SCHEMA_NAME, SILVER_TABLES
@@ -12,8 +12,9 @@ SOURCE_TABLE = SILVER_TABLES["country_lookup"]
 TARGET_TABLE = f"{GOLD_SCHEMA_NAME}.dim_country"
 
 
-def read_country_silver() -> DataFrame:
+def read_country_silver(spark: SparkSession) -> DataFrame:
     """Read the country lookup dataset from the Silver layer."""
+
     logger.info("Reading country lookup table: %s", SOURCE_TABLE)
 
     return spark.table(SOURCE_TABLE)
@@ -26,6 +27,7 @@ def build_dim_country(country_silver_df: DataFrame) -> DataFrame:
     Preserve the original SHA-256 country key logic:
     uppercase(trim(country_code_3_digit)).
     """
+
     required_columns = [
         "country",
         "country_code_2_digit",
@@ -92,7 +94,10 @@ def validate_dim_country(country_dim_df: DataFrame) -> None:
     logger.info("Country dimension key validation passed.")
 
 
-def publish_dim_country(country_dim_df: DataFrame) -> None:
+def publish_dim_country(
+    spark: SparkSession,
+    country_dim_df: DataFrame,
+) -> None:
     """Publish the country dimension as a Delta table."""
 
     source_count = country_dim_df.count()
@@ -123,13 +128,13 @@ def publish_dim_country(country_dim_df: DataFrame) -> None:
     )
 
 
-def run_dim_country() -> None:
+def run_dim_country(spark: SparkSession) -> None:
     """Execute the country dimension transformation."""
 
-    country_silver_df = read_country_silver()
+    country_silver_df = read_country_silver(spark)
 
     country_dim_df = build_dim_country(country_silver_df)
 
     validate_dim_country(country_dim_df)
 
-    publish_dim_country(country_dim_df)
+    publish_dim_country(spark, country_dim_df)
