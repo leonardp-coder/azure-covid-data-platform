@@ -1,6 +1,9 @@
+
 """
 Reusable Apache Spark utilities.
 """
+
+from typing import List, Sequence
 
 from pyspark.sql import DataFrame
 
@@ -12,7 +15,7 @@ def get_record_count(df: DataFrame) -> int:
     return df.count()
 
 
-def get_dataframe_columns(df: DataFrame) -> list:
+def get_dataframe_columns(df: DataFrame) -> List[str]:
     """
     Return the list of DataFrame column names.
     """
@@ -21,10 +24,13 @@ def get_dataframe_columns(df: DataFrame) -> list:
 
 def validate_required_columns(
     df: DataFrame,
-    required_columns: list
+    required_columns: Sequence[str],
 ) -> None:
     """
     Validate that all required columns exist.
+
+    Raises:
+        ValueError: If one or more required columns are missing.
     """
 
     missing_columns = [
