@@ -1,5 +1,5 @@
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from src.common.config import GOLD_SCHEMA_NAME
@@ -14,7 +14,7 @@ START_DATE = "2020-01-02"
 END_DATE = "2020-10-25"
 
 
-def build_dim_date() -> DataFrame:
+def build_dim_date(spark: SparkSession) -> DataFrame:
     """
     Generate the date dimension for the project.
 
@@ -59,24 +59,29 @@ def validate_dim_date(dim_date_df: DataFrame) -> None:
     """Validate date dimension keys and calendar coverage."""
 
     total_records = dim_date_df.count()
-    distinct_keys = dim_date_df.select("date_key").distinct().count()
+
+    distinct_keys = (
+        dim_date_df
+        .select("date_key")
+        .distinct()
+        .count()
+    )
 
     null_keys = dim_date_df.filter(
         F.col("date_key").isNull()
     ).count()
 
-    expected_records = (
-        F.datediff(
-            F.to_date(F.lit(END_DATE)),
-            F.to_date(F.lit(START_DATE)),
-        ) + 1
-    )
+    expected_records = 298
 
     if null_keys > 0:
-        raise ValueError(f"Date dimension has {null_keys} null date keys.")
+        raise ValueError(
+            f"Date dimension has {null_keys} null date keys."
+        )
 
     if total_records != distinct_keys:
-        raise ValueError("Date dimension contains duplicate date keys.")
+        raise ValueError(
+            "Date dimension contains duplicate date keys."
+        )
 
     if total_records != expected_records:
         raise ValueError(
@@ -85,15 +90,24 @@ def validate_dim_date(dim_date_df: DataFrame) -> None:
         )
 
     logger.info(
-        "Date dimension validation passed. Total records: %s",
+        "Date dimension validation passed. Rows: %s",
         total_records,
     )
 
 
-def publish_dim_date(dim_date_df: DataFrame) -> None:
+def publish_dim_date(
+    spark: SparkSession,
+    dim_date_df: DataFrame,
+) -> None:
     """Publish the date dimension as a Delta table."""
 
     source_count = dim_date_df.count()
+
+    logger.info(
+        "Publishing %s records to %s",
+        source_count,
+        TARGET_TABLE,
+    )
 
     (
         dim_date_df.write
@@ -116,11 +130,11 @@ def publish_dim_date(dim_date_df: DataFrame) -> None:
     )
 
 
-def run_dim_date() -> None:
+def run_dim_date(spark: SparkSession) -> None:
     """Execute the date dimension transformation."""
 
-    dim_date_df = build_dim_date()
+    dim_date_df = build_dim_date(spark)
 
     validate_dim_date(dim_date_df)
 
-    publish_dim_date(dim_date_df)
+    publish_dim_date(spark, dim_date_df)
