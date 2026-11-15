@@ -1,5 +1,5 @@
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from src.common.config import GOLD_SCHEMA_NAME, SILVER_TABLES
@@ -9,62 +9,57 @@ from src.common.logging_utils import get_logger
 logger = get_logger(__name__)
 
 SOURCE_TABLE = SILVER_TABLES["population_by_age"]
+
 COUNTRY_DIM_TABLE = f"{GOLD_SCHEMA_NAME}.dim_country"
-AGE_DIM_TABLE = f"{GOLD_SCHEMA_NAME}.dim_age_group"
+AGE_GROUP_DIM_TABLE = f"{GOLD_SCHEMA_NAME}.dim_age_group"
+
 TARGET_TABLE = f"{GOLD_SCHEMA_NAME}.fact_population_age"
 
 
-def read_population_silver() -> DataFrame:
+def read_population_silver(
+    spark: SparkSession,
+) -> DataFrame:
     """Read population data from the Silver layer."""
 
-    logger.info("Reading population Silver table: %s", SOURCE_TABLE)
+    logger.info("Reading population data from %s", SOURCE_TABLE)
 
     return spark.table(SOURCE_TABLE)
 
 
-def enrich_population_data(
-    population_silver_df: DataFrame,
+def enrich_with_dimensions(
+    spark: SparkSession,
+    population_df: DataFrame,
 ) -> DataFrame:
     """
     Enrich population data with country and age group keys.
 
-    Country dimension matching uses the ISO alpha-2 code.
+    Preserves the original notebook's left joins and join conditions.
     """
 
-    required_columns = [
-        "age_indicator",
-        "geo_code",
-        "geography_type",
-        "year",
-        "population_percentage",
-    ]
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in population_silver_df.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            f"Missing required population columns: {missing_columns}"
-        )
-
     dim_country_df = spark.table(COUNTRY_DIM_TABLE)
-    dim_age_group_df = spark.table(AGE_DIM_TABLE)
+    dim_age_group_df = spark.table(AGE_GROUP_DIM_TABLE)
 
-    return (
-        population_silver_df.alias("p")
+    logger.info("Joining population data with Gold dimensions")
+
+    fact_df = (
+        population_df.alias("p")
+
+        # Join age group dimension
         .join(
             dim_age_group_df.alias("a"),
-            F.col("p.age_indicator") == F.col("a.age_indicator"),
+            F.col("p.age_indicator")
+            == F.col("a.age_indicator"),
             "left",
         )
+
+        # Join country dimension using ISO alpha-2 code
         .join(
             dim_country_df.alias("c"),
-            F.col("p.geo_code") == F.col("c.country_code_2_digit"),
+            F.col("p.geo_code")
+            == F.col("c.country_code_2_digit"),
             "left",
         )
+
         .select(
             F.col("c.country_key").alias("country_key"),
             F.col("a.age_group_key").alias("age_group_key"),
@@ -75,6 +70,8 @@ def enrich_population_data(
         )
     )
 
+    return fact_df
+
 
 def validate_fact_population_age(
     fact_df: DataFrame,
@@ -84,67 +81,83 @@ def validate_fact_population_age(
     total_records = fact_df.count()
 
     if total_records == 0:
-        raise ValueError("Population age fact contains no records.")
+        raise ValueError(
+            "Population age fact contains no records."
+        )
 
-    null_age_keys = fact_df.filter(
+    null_age_group_keys = fact_df.filter(
         F.col("age_group_key").isNull()
     ).count()
 
-    if null_age_keys > 0:
-        raise ValueError(
-            f"Found {null_age_keys} records without age group keys."
-        )
-
-    null_country_keys = fact_df.filter(
-        F.col("country_key").isNull()
-    ).count()
-
-    null_population_values = fact_df.filter(
-        F.col("population_percentage").isNull()
-    ).count()
-
-    negative_values = fact_df.filter(
+    negative_percentages = fact_df.filter(
         F.col("population_percentage") < 0
     ).count()
 
-    above_100_values = fact_df.filter(
-        F.col("population_percentage") > 100
+    invalid_percentages = fact_df.filter(
+        (F.col("population_percentage") < 0)
+        | (F.col("population_percentage") > 100)
     ).count()
 
-    duplicate_count = (
+    duplicate_grain = (
         fact_df
-        .groupBy("geo_code", "age_group_key", "year")
+        .groupBy(
+            "geo_code",
+            "age_group_key",
+            "year",
+        )
         .count()
         .filter(F.col("count") > 1)
         .count()
     )
 
-    if negative_values > 0 or above_100_values > 0:
+    if null_age_group_keys > 0:
         raise ValueError(
-            "Invalid population percentages detected. "
-            "Values must be between 0 and 100."
+            f"Population fact contains {null_age_group_keys} "
+            "null age group keys."
         )
 
-    if duplicate_count > 0:
+    if negative_percentages > 0:
         raise ValueError(
-            f"Found {duplicate_count} duplicate population fact records."
+            f"Population fact contains {negative_percentages} "
+            "negative population percentages."
+        )
+
+    if invalid_percentages > 0:
+        raise ValueError(
+            f"Population fact contains {invalid_percentages} "
+            "percentages outside the 0-100 range."
+        )
+
+    if duplicate_grain > 0:
+        raise ValueError(
+            f"Population fact contains {duplicate_grain} "
+            "duplicate business-key groups."
         )
 
     logger.info(
-        "Population fact validation passed. "
-        "Rows=%s, null_country_keys=%s, null_population_values=%s",
+        "Population age fact validation passed. Rows: %s",
         total_records,
-        null_country_keys,
-        null_population_values,
+    )
+
+    logger.info(
+        "Null country keys and null population percentages "
+        "are permitted where present in the source data."
     )
 
 
 def publish_fact_population_age(
+    spark: SparkSession,
     fact_df: DataFrame,
 ) -> None:
     """Publish population age fact data as a Delta table."""
 
     source_count = fact_df.count()
+
+    logger.info(
+        "Publishing %s records to %s",
+        source_count,
+        TARGET_TABLE,
+    )
 
     (
         fact_df.write
@@ -168,13 +181,15 @@ def publish_fact_population_age(
     )
 
 
-def run_fact_population_age() -> None:
-    """Execute the population age fact transformation."""
+def run_fact_population_age(
+    spark: SparkSession,
+) -> None:
+    """Execute the complete population age fact pipeline."""
 
-    population_silver_df = read_population_silver()
+    population_df = read_population_silver(spark)
 
-    fact_df = enrich_population_data(population_silver_df)
+    fact_df = enrich_with_dimensions(spark, population_df)
 
     validate_fact_population_age(fact_df)
 
-    publish_fact_population_age(fact_df)
+    publish_fact_population_age(spark, fact_df)
