@@ -1,5 +1,5 @@
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from src.common.config import GOLD_SCHEMA_NAME, SILVER_TABLES
@@ -9,17 +9,17 @@ from src.common.logging_utils import get_logger
 logger = get_logger(__name__)
 
 SOURCE_TABLE = SILVER_TABLES["cases_deaths"]
+
 COUNTRY_DIM_TABLE = f"{GOLD_SCHEMA_NAME}.dim_country"
 DATE_DIM_TABLE = f"{GOLD_SCHEMA_NAME}.dim_date"
+
 TARGET_TABLE = f"{GOLD_SCHEMA_NAME}.fact_covid_daily"
 
-EXPECTED_INDICATORS = ["confirmed cases", "deaths"]
 
+def read_source_data(spark: SparkSession) -> DataFrame:
+    """Read COVID cases and deaths from the Silver layer."""
 
-def read_source_data() -> DataFrame:
-    """Read Silver cases and deaths data."""
-
-    logger.info("Reading source table: %s", SOURCE_TABLE)
+    logger.info("Reading COVID data from %s", SOURCE_TABLE)
 
     return spark.table(SOURCE_TABLE)
 
@@ -28,37 +28,14 @@ def aggregate_cases_deaths(
     cases_silver_df: DataFrame,
 ) -> DataFrame:
     """
-    Pivot cases and deaths indicators into separate measures.
+    Aggregate confirmed cases and deaths by geography and date.
 
-    Original grain:
-    country + country_code + continent + population + date
-    + geography_type.
+    Preserves the original notebook's grouping and aggregation logic.
     """
 
-    required_columns = [
-        "country",
-        "country_code",
-        "continent",
-        "population",
-        "date",
-        "geography_type",
-        "indicator",
-        "daily_count",
-        "rate_14_day",
-    ]
+    logger.info("Aggregating COVID cases and deaths")
 
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in cases_silver_df.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            f"Missing required Silver columns: {missing_columns}"
-        )
-
-    return (
+    cases_pivot_df = (
         cases_silver_df
         .groupBy(
             "country",
@@ -75,30 +52,42 @@ def aggregate_cases_deaths(
                     F.col("daily_count"),
                 ).otherwise(0)
             ).alias("confirmed_cases"),
+
             F.sum(
                 F.when(
                     F.col("indicator") == "deaths",
                     F.col("daily_count"),
                 ).otherwise(0)
             ).alias("new_deaths"),
+
             F.max("rate_14_day").alias("rate_14_day"),
         )
     )
 
+    logger.info(
+        "COVID aggregation completed. Records: %s",
+        cases_pivot_df.count(),
+    )
+
+    return cases_pivot_df
+
 
 def enrich_with_dimensions(
+    spark: SparkSession,
     cases_pivot_df: DataFrame,
 ) -> DataFrame:
     """
-    Enrich the aggregated data with country and date dimension keys.
-
-    Left joins preserve regional aggregates and unmatched source rows.
+    Enrich aggregated COVID data with country and date dimension keys.
     """
+
+    logger.info("Reading Gold dimensions")
 
     dim_country_df = spark.table(COUNTRY_DIM_TABLE)
     dim_date_df = spark.table(DATE_DIM_TABLE)
 
-    return (
+    logger.info("Joining COVID data with dimensions")
+
+    cases_fact_df = (
         cases_pivot_df.alias("c")
         .join(
             dim_country_df.alias("country"),
@@ -125,47 +114,29 @@ def enrich_with_dimensions(
         )
     )
 
+    return cases_fact_df
+
 
 def validate_fact_covid_daily(
     fact_df: DataFrame,
 ) -> None:
-    """Validate fact records, keys and measures."""
+    """Validate COVID daily fact records and business grain."""
 
     total_records = fact_df.count()
 
     if total_records == 0:
-        raise ValueError("COVID daily fact table contains no records.")
+        raise ValueError("COVID daily fact contains no records.")
 
     null_date_keys = fact_df.filter(
         F.col("date_key").isNull()
     ).count()
 
-    if null_date_keys > 0:
-        raise ValueError(
-            f"Found {null_date_keys} records with null date keys."
-        )
-
     null_country_keys = fact_df.filter(
-        F.col("country_key").isNull()
-    ).count()
-
-    regional_null_keys = fact_df.filter(
-        (F.col("geography_type") != "countries")
-        & F.col("country_key").isNull()
-    ).count()
-
-    country_null_keys = fact_df.filter(
         (F.col("geography_type") == "countries")
         & F.col("country_key").isNull()
     ).count()
 
-    if country_null_keys > 0:
-        raise ValueError(
-            f"Found {country_null_keys} country records without "
-            "a matching country dimension key."
-        )
-
-    duplicate_grain_count = (
+    duplicate_grain = (
         fact_df
         .groupBy("geography_name", "date_key")
         .count()
@@ -173,12 +144,7 @@ def validate_fact_covid_daily(
         .count()
     )
 
-    if duplicate_grain_count > 0:
-        raise ValueError(
-            f"Found {duplicate_grain_count} duplicate geography/date keys."
-        )
-
-    negative_cases = fact_df.filter(
+    negative_confirmed_cases = fact_df.filter(
         F.col("confirmed_cases") < 0
     ).count()
 
@@ -186,26 +152,51 @@ def validate_fact_covid_daily(
         F.col("new_deaths") < 0
     ).count()
 
-    if negative_cases > 0 or negative_deaths > 0:
+    if null_date_keys > 0:
         raise ValueError(
-            "Negative values detected in COVID fact measures."
+            f"COVID fact contains {null_date_keys} null date keys."
+        )
+
+    if null_country_keys > 0:
+        raise ValueError(
+            f"COVID fact contains {null_country_keys} "
+            "country records without matching country keys."
+        )
+
+    if duplicate_grain > 0:
+        raise ValueError(
+            f"COVID fact contains {duplicate_grain} duplicate "
+            "geography and date combinations."
+        )
+
+    if negative_confirmed_cases > 0 or negative_deaths > 0:
+        raise ValueError(
+            "COVID fact contains negative case or death measures."
         )
 
     logger.info(
-        "COVID daily fact validation passed. "
-        "Rows=%s, null_country_keys=%s, regional_null_keys=%s",
+        "COVID daily fact validation passed. Rows: %s",
         total_records,
-        null_country_keys,
-        regional_null_keys,
+    )
+
+    logger.info(
+        "Regional records with null country keys are permitted."
     )
 
 
 def publish_fact_covid_daily(
+    spark: SparkSession,
     fact_df: DataFrame,
 ) -> None:
-    """Publish the COVID daily fact table as Delta."""
+    """Publish COVID daily fact data as a Delta table."""
 
     source_count = fact_df.count()
+
+    logger.info(
+        "Publishing %s records to %s",
+        source_count,
+        TARGET_TABLE,
+    )
 
     (
         fact_df.write
@@ -218,7 +209,7 @@ def publish_fact_covid_daily(
 
     if source_count != target_count:
         raise RuntimeError(
-            f"Fact row count mismatch: "
+            f"COVID fact row count mismatch: "
             f"source={source_count}, target={target_count}"
         )
 
@@ -228,15 +219,15 @@ def publish_fact_covid_daily(
     )
 
 
-def run_fact_covid_daily() -> None:
-    """Execute the COVID daily fact transformation."""
+def run_fact_covid_daily(spark: SparkSession) -> None:
+    """Execute the complete COVID daily fact pipeline."""
 
-    cases_silver_df = read_source_data()
+    cases_silver_df = read_source_data(spark)
 
     cases_pivot_df = aggregate_cases_deaths(cases_silver_df)
 
-    fact_df = enrich_with_dimensions(cases_pivot_df)
+    fact_df = enrich_with_dimensions(spark, cases_pivot_df)
 
     validate_fact_covid_daily(fact_df)
 
-    publish_fact_covid_daily(fact_df)
+    publish_fact_covid_daily(spark, fact_df)
