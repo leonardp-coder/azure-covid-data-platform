@@ -1,12 +1,41 @@
 
-from pyspark.sql import DataFrame
+"""
+Silver transformation module for population by age.
+
+Input:
+    Bronze population_by_age Delta table.
+
+Output:
+    Silver population_by_age Delta table.
+
+Responsibilities:
+    - Split age and geography attributes.
+    - Classify geographic records.
+    - Unpivot annual population columns.
+    - Clean population percentages and source flags.
+    - Perform dataset-specific data quality checks.
+    - Publish the transformed Silver dataset.
+
+This is a portfolio refactor. It has not been executed
+or independently validated against the Azure workspace.
+"""
+
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from src.common.config import BRONZE_TABLES, SILVER_TABLES
+from src.common.config import (
+    BRONZE_TABLES,
+    SILVER_TABLES,
+)
 from src.common.logging_utils import get_logger
 
 
 logger = get_logger(__name__)
+
+
+# ------------------------------------------------------------
+# DATASET CONFIGURATION
+# ------------------------------------------------------------
 
 START_YEAR = 2008
 END_YEAR = 2019
@@ -24,13 +53,23 @@ AGGREGATE_GEO_CODES = [
     "EU28",
 ]
 
-REVIEW_GEO_CODES = ["FX", "XK"]
+REVIEW_GEO_CODES = [
+    "FX",
+    "XK",
+]
 
 REQUIRED_COLUMNS = ["age_geo"] + YEAR_COLUMNS
 
 
-def read_bronze_population(spark) -> DataFrame:
+# ------------------------------------------------------------
+# SOURCE EXTRACTION
+# ------------------------------------------------------------
+
+def read_bronze_population(
+    spark: SparkSession,
+) -> DataFrame:
     """Read the Bronze population dataset."""
+
     table_name = BRONZE_TABLES["population_by_age"]
 
     logger.info("Reading Bronze table: %s", table_name)
@@ -38,8 +77,15 @@ def read_bronze_population(spark) -> DataFrame:
     return spark.table(table_name)
 
 
-def validate_population_columns(df: DataFrame) -> None:
+# ------------------------------------------------------------
+# SOURCE VALIDATION
+# ------------------------------------------------------------
+
+def validate_population_columns(
+    df: DataFrame,
+) -> None:
     """Ensure the expected source columns are available."""
+
     missing_columns = [
         column
         for column in REQUIRED_COLUMNS
@@ -52,48 +98,75 @@ def validate_population_columns(df: DataFrame) -> None:
         )
 
 
-def split_age_geography(df: DataFrame) -> DataFrame:
+# ------------------------------------------------------------
+# AGE AND GEOGRAPHY TRANSFORMATION
+# ------------------------------------------------------------
+
+def split_age_geography(
+    df: DataFrame,
+) -> DataFrame:
     """Separate the age indicator and geography code."""
+
     return (
         df
         .withColumn(
             "age_indicator",
-            F.trim(F.split(F.col("age_geo"), ",").getItem(0))
+            F.trim(
+                F.split(F.col("age_geo"), ",").getItem(0)
+            ),
         )
         .withColumn(
             "geo_code",
             F.upper(
-                F.trim(F.split(F.col("age_geo"), ",").getItem(1))
-            )
+                F.trim(
+                    F.split(F.col("age_geo"), ",").getItem(1)
+                )
+            ),
         )
         .withColumn(
             "age_group",
-            F.regexp_replace(F.col("age_indicator"), "^PC_Y", "")
+            F.regexp_replace(
+                F.col("age_indicator"),
+                "^PC_Y",
+                "",
+            ),
         )
     )
 
 
-def classify_geography(df: DataFrame) -> DataFrame:
+def classify_geography(
+    df: DataFrame,
+) -> DataFrame:
     """Classify regional aggregates and geography codes requiring review."""
+
     return (
         df
         .withColumn(
             "geography_type",
             F.when(
                 F.col("geo_code").isin(AGGREGATE_GEO_CODES),
-                F.lit("REGIONAL_AGGREGATE")
+                F.lit("REGIONAL_AGGREGATE"),
             )
             .when(
                 F.col("geo_code").isin(REVIEW_GEO_CODES),
-                F.lit("requires_review")
+                F.lit("requires_review"),
             )
-            .otherwise(F.lit("Country_candidate"))
+            .otherwise(
+                F.lit("Country_candidate")
+            ),
         )
     )
 
 
-def unpivot_population_years(df: DataFrame) -> DataFrame:
+# ------------------------------------------------------------
+# YEAR UNPIVOTING
+# ------------------------------------------------------------
+
+def unpivot_population_years(
+    df: DataFrame,
+) -> DataFrame:
     """Convert the 2008–2019 year columns into rows."""
+
     id_columns = [
         "age_geo",
         "age_indicator",
@@ -106,8 +179,12 @@ def unpivot_population_years(df: DataFrame) -> DataFrame:
     # Bronze ingestion module is being aligned.
     if "_ingested_at" in df.columns:
         id_columns.append("_ingested_at")
+
     elif "ingested_at" in df.columns:
-        df = df.withColumnRenamed("ingested_at", "_ingested_at")
+        df = df.withColumnRenamed(
+            "ingested_at",
+            "_ingested_at",
+        )
         id_columns.append("_ingested_at")
 
     if "_source_file" in df.columns:
@@ -126,20 +203,27 @@ def unpivot_population_years(df: DataFrame) -> DataFrame:
             F.regexp_extract(
                 F.col("year_column"),
                 r"(\d{4})$",
-                1
-            ).cast("int")
+                1,
+            ).cast("int"),
         )
         .drop("year_column")
     )
 
 
-def clean_population_values(df: DataFrame) -> DataFrame:
+# ------------------------------------------------------------
+# POPULATION VALUE CLEANING
+# ------------------------------------------------------------
+
+def clean_population_values(
+    df: DataFrame,
+) -> DataFrame:
     """Clean numeric population percentages and retain source flags."""
+
     return (
         df
         .withColumn(
             "raw_population_value",
-            F.trim(F.col("raw_population_value"))
+            F.trim(F.col("raw_population_value")),
         )
         .withColumn(
             "source_flag",
@@ -150,66 +234,96 @@ def clean_population_values(df: DataFrame) -> DataFrame:
                 F.regexp_extract(
                     F.col("raw_population_value"),
                     r"(?i)([a-z]+)\s*$",
-                    1
-                )
-            )
+                    1,
+                ),
+            ),
         )
         .withColumn(
             "population_percentage",
             F.when(
                 F.col("raw_population_value").isNull()
                 | (F.col("raw_population_value") == ":"),
-                F.lit(None).cast("double")
+                F.lit(None).cast("double"),
             )
             .otherwise(
                 F.regexp_replace(
                     F.col("raw_population_value"),
                     r"(?i)\s*[a-z]+\s*$",
-                    ""
+                    "",
                 ).cast("double")
-            )
+            ),
         )
     )
 
 
-def validate_population_data(df: DataFrame) -> None:
+# ------------------------------------------------------------
+# DATA QUALITY VALIDATION
+# ------------------------------------------------------------
+
+def validate_population_data(
+    df: DataFrame,
+) -> None:
     """Run data-quality checks on the transformed population data."""
+
     metrics = (
         df
         .agg(
             F.count("*").alias("total_records"),
-            F.count("population_percentage").alias("numeric_values"),
+
+            F.count("population_percentage").alias(
+                "numeric_values"
+            ),
+
             F.count(
-                F.when(F.col("population_percentage").isNull(), 1)
+                F.when(
+                    F.col("population_percentage").isNull(),
+                    1,
+                )
             ).alias("null_values"),
+
             F.count(
                 F.when(
                     F.col("raw_population_value").isNotNull()
                     & (F.col("raw_population_value") != ":")
                     & F.col("population_percentage").isNull(),
-                    1
+                    1,
                 )
             ).alias("invalid_numeric_values"),
+
             F.count(
-                F.when(F.col("source_flag").isNotNull(), 1)
+                F.when(
+                    F.col("source_flag").isNotNull(),
+                    1,
+                )
             ).alias("flagged_values"),
+
             F.count(
-                F.when(F.col("population_percentage") < 0, 1)
+                F.when(
+                    F.col("population_percentage") < 0,
+                    1,
+                )
             ).alias("negative_values"),
+
             F.count(
-                F.when(F.col("population_percentage") > 100, 1)
+                F.when(
+                    F.col("population_percentage") > 100,
+                    1,
+                )
             ).alias("values_above_100"),
         )
         .first()
         .asDict()
     )
 
-    logger.info("Population quality metrics: %s", metrics)
+    logger.info(
+        "Population quality metrics: %s",
+        metrics,
+    )
 
     if metrics["invalid_numeric_values"] > 0:
         raise ValueError(
-            "Population data contains values that could not be converted "
-            "to numeric percentages."
+            "Population data contains values that could not be "
+            "converted to numeric percentages."
         )
 
     if metrics["negative_values"] > 0:
@@ -241,17 +355,27 @@ def validate_population_data(df: DataFrame) -> None:
     if incomplete_years > 0:
         logger.warning(
             "%s age/geography records have incomplete year coverage.",
-            incomplete_years
+            incomplete_years,
         )
 
 
-def prepare_silver_population(df: DataFrame) -> DataFrame:
+# ------------------------------------------------------------
+# SILVER DATASET PREPARATION
+# ------------------------------------------------------------
+
+def prepare_silver_population(
+    df: DataFrame,
+) -> DataFrame:
     """Apply the complete population Silver transformation."""
+
     validate_population_columns(df)
 
     transformed_df = split_age_geography(df)
+
     transformed_df = classify_geography(transformed_df)
+
     transformed_df = unpivot_population_years(transformed_df)
+
     transformed_df = clean_population_values(transformed_df)
 
     validate_population_data(transformed_df)
@@ -276,8 +400,16 @@ def prepare_silver_population(df: DataFrame) -> DataFrame:
     return transformed_df.select(*output_columns)
 
 
-def write_silver_population(df: DataFrame, spark) -> None:
+# ------------------------------------------------------------
+# SILVER PUBLISHING
+# ------------------------------------------------------------
+
+def write_silver_population(
+    spark: SparkSession,
+    df: DataFrame,
+) -> None:
     """Write the transformed dataset to the Silver Delta table."""
+
     target_table = SILVER_TABLES["population_by_age"]
 
     source_count = df.count()
@@ -285,7 +417,7 @@ def write_silver_population(df: DataFrame, spark) -> None:
     logger.info(
         "Writing %s records to %s",
         source_count,
-        target_table
+        target_table,
     )
 
     (
@@ -306,17 +438,25 @@ def write_silver_population(df: DataFrame, spark) -> None:
 
     logger.info(
         "Silver population load completed. Rows written: %s",
-        target_count
+        target_count,
     )
 
 
-def process_population(spark) -> None:
+# ------------------------------------------------------------
+# DATASET TRANSFORMATION ENTRY POINT
+# ------------------------------------------------------------
+
+def process_population(
+    spark: SparkSession,
+) -> None:
     """Run the complete Bronze-to-Silver population process."""
+
     logger.info("Starting Silver population transformation.")
 
     bronze_df = read_bronze_population(spark)
+
     silver_df = prepare_silver_population(bronze_df)
 
-    write_silver_population(silver_df, spark)
+    write_silver_population(spark, silver_df)
 
     logger.info("Silver population transformation completed.")
