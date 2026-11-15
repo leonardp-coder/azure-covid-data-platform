@@ -1,70 +1,71 @@
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from src.common.config import GOLD_SCHEMA_NAME, SILVER_TABLES
 from src.common.logging_utils import get_logger
+from src.silver.hospital import DAILY_INDICATORS
 
 
 logger = get_logger(__name__)
 
 SOURCE_TABLE = SILVER_TABLES["hospital_admissions"]
+
 COUNTRY_DIM_TABLE = f"{GOLD_SCHEMA_NAME}.dim_country"
 DATE_DIM_TABLE = f"{GOLD_SCHEMA_NAME}.dim_date"
+
 TARGET_TABLE = f"{GOLD_SCHEMA_NAME}.fact_hospital_daily"
 
 
-def read_hospital_silver() -> DataFrame:
-    """Read hospital admission data from Silver."""
+def read_hospital_silver(
+    spark: SparkSession,
+) -> DataFrame:
+    """Read hospital admissions from the Silver layer."""
 
-    logger.info("Reading hospital Silver table: %s", SOURCE_TABLE)
+    logger.info("Reading hospital data from %s", SOURCE_TABLE)
 
     return spark.table(SOURCE_TABLE)
 
 
 def prepare_daily_data(
-    hospital_silver_df: DataFrame,
+    hospital_df: DataFrame,
 ) -> DataFrame:
     """
-    Select daily hospital records.
+    Select daily hospital indicators only.
 
-    Daily records are identified by the presence of a date.
+    Weekly records remain in Silver and are processed
+    separately by the weekly fact module.
     """
 
-    required_columns = [
-        "country",
-        "indicator",
-        "date",
-        "value",
-        "source",
-    ]
+    logger.info("Selecting daily hospital indicators")
 
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in hospital_silver_df.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            f"Missing required hospital columns: {missing_columns}"
-        )
-
-    return hospital_silver_df.filter(
-        F.col("date").isNotNull()
+    daily_df = hospital_df.filter(
+        F.col("indicator").isin(DAILY_INDICATORS)
     )
+
+    logger.info(
+        "Daily hospital records selected: %s",
+        daily_df.count(),
+    )
+
+    return daily_df
 
 
 def enrich_with_dimensions(
-    hospital_daily_df: DataFrame,
+    spark: SparkSession,
+    daily_df: DataFrame,
 ) -> DataFrame:
-    """Join daily hospital records with country and date dimensions."""
+    """
+    Enrich daily hospital records with country and date keys.
+    """
 
     dim_country_df = spark.table(COUNTRY_DIM_TABLE)
     dim_date_df = spark.table(DATE_DIM_TABLE)
 
-    return (
-        hospital_daily_df.alias("h")
+    logger.info("Joining daily hospital data with dimensions")
+
+    fact_df = (
+        daily_df.alias("h")
         .join(
             dim_country_df.alias("c"),
             F.col("h.country") == F.col("c.country_name"),
@@ -85,16 +86,20 @@ def enrich_with_dimensions(
         )
     )
 
+    return fact_df
+
 
 def validate_fact_hospital_daily(
     fact_df: DataFrame,
 ) -> None:
-    """Validate daily hospital fact records."""
+    """Validate daily hospital fact records and business grain."""
 
     total_records = fact_df.count()
 
     if total_records == 0:
-        raise ValueError("Daily hospital fact contains no records.")
+        raise ValueError(
+            "Daily hospital fact contains no records."
+        )
 
     null_country_keys = fact_df.filter(
         F.col("country_key").isNull()
@@ -116,37 +121,52 @@ def validate_fact_hospital_daily(
         F.col("value") < 0
     ).count()
 
-    if null_country_keys > 0:
-        raise ValueError(
-            f"Found {null_country_keys} unmatched country dimension keys."
-        )
-
-    if null_date_keys > 0:
-        raise ValueError(
-            f"Found {null_date_keys} unmatched date dimension keys."
-        )
-
-    if null_country_names > 0 or null_indicators > 0:
-        raise ValueError(
-            "Null country names or indicators found in daily fact."
-        )
-
-    if negative_values > 0:
-        raise ValueError(
-            f"Found {negative_values} negative hospital values."
-        )
-
-    duplicate_count = (
+    duplicate_grain = (
         fact_df
-        .groupBy("country_name", "date_key", "indicator")
+        .groupBy(
+            "country_name",
+            "date_key",
+            "indicator",
+        )
         .count()
         .filter(F.col("count") > 1)
         .count()
     )
 
-    if duplicate_count > 0:
+    if null_country_keys > 0:
         raise ValueError(
-            f"Found {duplicate_count} duplicate daily fact records."
+            f"Daily hospital fact has {null_country_keys} "
+            "unmatched country keys."
+        )
+
+    if null_date_keys > 0:
+        raise ValueError(
+            f"Daily hospital fact has {null_date_keys} "
+            "unmatched date keys."
+        )
+
+    if null_country_names > 0:
+        raise ValueError(
+            f"Daily hospital fact has {null_country_names} "
+            "null country names."
+        )
+
+    if null_indicators > 0:
+        raise ValueError(
+            f"Daily hospital fact has {null_indicators} "
+            "null indicators."
+        )
+
+    if negative_values > 0:
+        raise ValueError(
+            f"Daily hospital fact has {negative_values} "
+            "negative values."
+        )
+
+    if duplicate_grain > 0:
+        raise ValueError(
+            f"Daily hospital fact has {duplicate_grain} "
+            "duplicate business-key groups."
         )
 
     logger.info(
@@ -156,11 +176,18 @@ def validate_fact_hospital_daily(
 
 
 def publish_fact_hospital_daily(
+    spark: SparkSession,
     fact_df: DataFrame,
 ) -> None:
     """Publish daily hospital fact data as a Delta table."""
 
     source_count = fact_df.count()
+
+    logger.info(
+        "Publishing %s records to %s",
+        source_count,
+        TARGET_TABLE,
+    )
 
     (
         fact_df.write
@@ -173,8 +200,8 @@ def publish_fact_hospital_daily(
 
     if source_count != target_count:
         raise RuntimeError(
-            f"Row count mismatch: source={source_count}, "
-            f"target={target_count}"
+            f"Daily hospital row count mismatch: "
+            f"source={source_count}, target={target_count}"
         )
 
     logger.info(
@@ -183,15 +210,17 @@ def publish_fact_hospital_daily(
     )
 
 
-def run_fact_hospital_daily() -> None:
-    """Execute the daily hospital fact transformation."""
+def run_fact_hospital_daily(
+    spark: SparkSession,
+) -> None:
+    """Execute the complete daily hospital fact pipeline."""
 
-    hospital_silver_df = read_hospital_silver()
+    hospital_df = read_hospital_silver(spark)
 
-    hospital_daily_df = prepare_daily_data(hospital_silver_df)
+    daily_df = prepare_daily_data(hospital_df)
 
-    fact_df = enrich_with_dimensions(hospital_daily_df)
+    fact_df = enrich_with_dimensions(spark, daily_df)
 
     validate_fact_hospital_daily(fact_df)
 
-    publish_fact_hospital_daily(fact_df)
+    publish_fact_hospital_daily(spark, fact_df)
