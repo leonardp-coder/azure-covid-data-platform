@@ -295,6 +295,7 @@ def validate_hospital_admissions(
 # ------------------------------------------------------------
 
 def publish_silver_hospital_admissions(
+    spark: SparkSession,
     df: DataFrame,
 ) -> int:
     """
@@ -323,11 +324,7 @@ def publish_silver_hospital_admissions(
         .saveAsTable(target_table)
     )
 
-    published_count = (
-        df.sparkSession
-        .table(target_table)
-        .count()
-    )
+    published_count = spark.table(target_table).count()
 
     if source_count != published_count:
         raise RuntimeError(
@@ -363,7 +360,10 @@ def process_hospital_admissions(
 
     validation_results = validate_hospital_admissions(silver_df)
 
-    published_count = publish_silver_hospital_admissions(silver_df)
+    published_count = publish_silver_hospital_admissions(
+        spark,
+        silver_df,
+    )
 
     validation_results["published_records"] = published_count
 
