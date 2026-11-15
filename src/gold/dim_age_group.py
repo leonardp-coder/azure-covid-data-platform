@@ -1,5 +1,5 @@
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -13,50 +13,33 @@ SOURCE_TABLE = SILVER_TABLES["population_by_age"]
 TARGET_TABLE = f"{GOLD_SCHEMA_NAME}.dim_age_group"
 
 
-def read_population_silver() -> DataFrame:
+def read_population_silver(spark: SparkSession) -> DataFrame:
     """Read population data from the Silver layer."""
 
-    logger.info("Reading population Silver table: %s", SOURCE_TABLE)
+    logger.info("Reading population data from %s", SOURCE_TABLE)
 
     return spark.table(SOURCE_TABLE)
 
 
-def build_dim_age_group(
-    population_silver_df: DataFrame,
-) -> DataFrame:
-    """
-    Build the age group dimension.
+def build_dim_age_group(population_df: DataFrame) -> DataFrame:
+    """Build the age group dimension."""
 
-    Preserve the original grouping and row_number key-generation logic.
-    """
+    logger.info("Building age group dimension")
 
-    required_columns = ["age_indicator", "age_group"]
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in population_silver_df.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            f"Missing required population columns: {missing_columns}"
-        )
-
-    age_group_df = (
-        population_silver_df
+    age_groups_df = (
+        population_df
         .groupBy("age_indicator", "age_group")
-        .count()
+        .agg(F.count("*").alias("record_count"))
         .orderBy("age_group")
     )
 
-    age_window = Window.orderBy("age_group")
+    window_spec = Window.orderBy("age_group")
 
     dim_age_group_df = (
-        age_group_df
+        age_groups_df
         .withColumn(
             "age_group_key",
-            F.row_number().over(age_window),
+            F.row_number().over(window_spec),
         )
         .select(
             "age_group_key",
@@ -68,9 +51,7 @@ def build_dim_age_group(
     return dim_age_group_df
 
 
-def validate_dim_age_group(
-    dim_age_group_df: DataFrame,
-) -> None:
+def validate_dim_age_group(dim_age_group_df: DataFrame) -> None:
     """Validate age group dimension records and keys."""
 
     total_records = dim_age_group_df.count()
@@ -82,40 +63,47 @@ def validate_dim_age_group(
         .count()
     )
 
-    distinct_groups = (
-        dim_age_group_df
-        .select("age_group")
-        .distinct()
-        .count()
-    )
-
     null_keys = dim_age_group_df.filter(
         F.col("age_group_key").isNull()
     ).count()
 
+    expected_records = 6
+
     if null_keys > 0:
-        raise ValueError("Age group dimension contains null keys.")
+        raise ValueError(
+            f"Age group dimension has {null_keys} null keys."
+        )
 
     if total_records != distinct_keys:
-        raise ValueError("Duplicate age group keys detected.")
-
-    if total_records != distinct_groups:
         raise ValueError(
-            "An age group has multiple dimension records."
+            "Age group dimension contains duplicate keys."
+        )
+
+    if total_records != expected_records:
+        raise ValueError(
+            f"Unexpected age group count: expected={expected_records}, "
+            f"actual={total_records}"
         )
 
     logger.info(
-        "Age group dimension validation passed. Records: %s",
+        "Age group dimension validation passed. Rows: %s",
         total_records,
     )
 
 
 def publish_dim_age_group(
+    spark: SparkSession,
     dim_age_group_df: DataFrame,
 ) -> None:
     """Publish the age group dimension as a Delta table."""
 
     source_count = dim_age_group_df.count()
+
+    logger.info(
+        "Publishing %s records to %s",
+        source_count,
+        TARGET_TABLE,
+    )
 
     (
         dim_age_group_df.write
@@ -138,13 +126,13 @@ def publish_dim_age_group(
     )
 
 
-def run_dim_age_group() -> None:
-    """Execute the age group dimension transformation."""
+def run_dim_age_group(spark: SparkSession) -> None:
+    """Execute the age group dimension pipeline."""
 
-    population_silver_df = read_population_silver()
+    population_df = read_population_silver(spark)
 
-    dim_age_group_df = build_dim_age_group(population_silver_df)
+    dim_age_group_df = build_dim_age_group(population_df)
 
     validate_dim_age_group(dim_age_group_df)
 
-    publish_dim_age_group(dim_age_group_df)
+    publish_dim_age_group(spark, dim_age_group_df)
