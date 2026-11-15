@@ -19,9 +19,9 @@ This is a portfolio refactor and has not been executed
 or independently validated against the Azure workspace.
 """
 
-from typing import Dict, List
+from typing import Dict
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from src.common.config import (
@@ -49,7 +49,9 @@ BUSINESS_KEY_COLUMNS = [
 # SOURCE EXTRACTION
 # ------------------------------------------------------------
 
-def read_bronze_cases_deaths(spark) -> DataFrame:
+def read_bronze_cases_deaths(
+    spark: SparkSession,
+) -> DataFrame:
     """Read the Bronze COVID cases and deaths table."""
 
     table_name = BRONZE_TABLES["cases_deaths"]
@@ -66,9 +68,7 @@ def read_bronze_cases_deaths(spark) -> DataFrame:
 def transform_cases_deaths(
     df: DataFrame,
 ) -> DataFrame:
-    """
-    Standardize and transform COVID cases and deaths data.
-    """
+    """Standardize and transform COVID cases and deaths data."""
 
     logger.info("Starting cases and deaths transformation.")
 
@@ -141,7 +141,6 @@ def validate_cases_deaths(
     """
     Run dataset-specific data quality checks.
 
-    Returns a dictionary of validation results.
     Intentional regional null country codes are not treated
     as failures.
     """
@@ -209,19 +208,29 @@ def validate_cases_deaths(
     failed_checks = []
 
     if any(null_counts.values()):
-        failed_checks.append("Required columns contain null values")
+        failed_checks.append(
+            "Required columns contain null values"
+        )
 
     if negative_count > 0:
-        failed_checks.append("Negative daily counts detected")
+        failed_checks.append(
+            "Negative daily counts detected"
+        )
 
     if unexpected_indicators:
-        failed_checks.append("Unexpected indicators detected")
+        failed_checks.append(
+            "Unexpected indicators detected"
+        )
 
     if duplicate_count > 0:
-        failed_checks.append("Duplicate business keys detected")
+        failed_checks.append(
+            "Duplicate business keys detected"
+        )
 
     if invalid_geography_count > 0:
-        failed_checks.append("Invalid geography classifications detected")
+        failed_checks.append(
+            "Invalid geography classifications detected"
+        )
 
     if failed_checks:
         raise ValueError(
@@ -238,6 +247,7 @@ def validate_cases_deaths(
 # ------------------------------------------------------------
 
 def publish_silver_cases_deaths(
+    spark: SparkSession,
     df: DataFrame,
 ) -> None:
     """
@@ -261,9 +271,12 @@ def publish_silver_cases_deaths(
         .saveAsTable(target_table)
     )
 
+    target_count = spark.table(target_table).count()
+
     logger.info(
-        "Silver publishing completed for %s",
+        "Silver publishing completed for %s. Rows: %s",
         target_table,
+        target_count,
     )
 
 
@@ -271,10 +284,10 @@ def publish_silver_cases_deaths(
 # DATASET TRANSFORMATION ENTRY POINT
 # ------------------------------------------------------------
 
-def process_cases_deaths(spark) -> Dict:
-    """
-    Execute the complete Silver cases and deaths workflow.
-    """
+def process_cases_deaths(
+    spark: SparkSession,
+) -> Dict:
+    """Execute the complete Silver cases and deaths workflow."""
 
     logger.info("Starting Silver cases and deaths workflow.")
 
@@ -284,7 +297,7 @@ def process_cases_deaths(spark) -> Dict:
 
     validation_results = validate_cases_deaths(silver_df)
 
-    publish_silver_cases_deaths(silver_df)
+    publish_silver_cases_deaths(spark, silver_df)
 
     logger.info("Silver cases and deaths workflow completed.")
 
