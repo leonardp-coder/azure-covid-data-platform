@@ -79,6 +79,61 @@ MEASURE_CHECKS = {
     ],
 }
 
+def validate_gold_table_columns(
+    gold_tables: Dict[str, DataFrame],
+) -> None:
+    """
+    Validate required columns across Gold tables before auditing.
+    """
+
+    required_columns = {
+        "dim_country": ["country_key"],
+        "dim_date": ["date_key"],
+        "dim_age_group": ["age_group_key"],
+        "fact_covid_daily": [
+            "country_key",
+            "date_key",
+            "geography_name",
+            "confirmed_cases",
+            "new_deaths",
+        ],
+        "fact_hospital_daily": [
+            "country_key",
+            "date_key",
+            "country_name",
+            "indicator",
+            "value",
+        ],
+        "fact_hospital_weekly": [
+            "country_key",
+            "country_name",
+            "year_week",
+            "indicator",
+            "value",
+        ],
+        "fact_population_age": [
+            "country_key",
+            "age_group_key",
+            "geo_code",
+            "year",
+            "population_percentage",
+        ],
+    }
+
+    for table_name, required in required_columns.items():
+        missing = [
+            column
+            for column in required
+            if column not in gold_tables[table_name].columns
+        ]
+
+        if missing:
+            raise ValueError(
+                f"Gold table {table_name} is missing columns: {missing}"
+            )
+
+
+
 
 def read_gold_tables(
     spark: SparkSession,
@@ -386,6 +441,8 @@ def run_gold_audit(
     logger.info("Starting Gold layer audit")
 
     gold_tables = read_gold_tables(spark)
+
+    validate_gold_table_columns(gold_tables)
 
     audit_results = {
         "row_counts": audit_row_counts(
