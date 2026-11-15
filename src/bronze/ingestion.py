@@ -5,7 +5,7 @@ Bronze ingestion module for the Azure COVID Data Engineering project.
 Responsibilities:
     1. Read source CSV and compressed TSV datasets.
     2. Add ingestion metadata.
-    3. Validate source structure.
+    3. Apply dataset-specific source preparation.
     4. Publish datasets as Bronze Delta tables.
     5. Reconcile source and published record counts.
 
@@ -149,7 +149,7 @@ def read_source_dataset(
 
 
 # ------------------------------------------------------------
-# INGESTION METADATA AND SOURCE VALIDATION
+# INGESTION METADATA AND SOURCE PREPARATION
 # ------------------------------------------------------------
 
 def add_ingestion_metadata(
@@ -192,6 +192,11 @@ def prepare_bronze_dataset(
     Apply dataset-specific preparation before Bronze publishing.
     """
 
+    if dataset_name not in SOURCE_FILES:
+        raise ValueError(
+            f"Unsupported source dataset: {dataset_name}"
+        )
+
     if dataset_name == "population_by_age":
         df = prepare_population_dataset(df)
 
@@ -208,6 +213,7 @@ def prepare_bronze_dataset(
 # ------------------------------------------------------------
 
 def write_bronze_table(
+    spark: SparkSession,
     df: DataFrame,
     table_name: str,
 ) -> int:
@@ -235,9 +241,7 @@ def write_bronze_table(
         .saveAsTable(table_name)
     )
 
-    published_count = df.sparkSession.table(
-        table_name
-    ).count()
+    published_count = spark.table(table_name).count()
 
     if source_count != published_count:
         raise RuntimeError(
@@ -278,10 +282,10 @@ def ingest_bronze_datasets(
         f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{BRONZE_SCHEMA}"
     )
 
-    ingestion_results = {}
+    ingestion_results: Dict[str, int] = {}
 
     try:
-        for dataset_name, source_config in SOURCE_FILES.items():
+        for dataset_name in SOURCE_FILES:
 
             logger.info(
                 "Processing dataset: %s",
@@ -301,6 +305,7 @@ def ingest_bronze_datasets(
             target_table = BRONZE_TABLES[dataset_name]
 
             published_count = write_bronze_table(
+                spark,
                 bronze_df,
                 target_table,
             )
@@ -316,7 +321,5 @@ def ingest_bronze_datasets(
         return ingestion_results
 
     except Exception:
-        logger.exception(
-            "Bronze ingestion failed."
-        )
+        logger.exception("Bronze ingestion failed.")
         raise
