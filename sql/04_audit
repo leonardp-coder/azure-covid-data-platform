@@ -1,0 +1,42 @@
+IF OBJECT_ID(N'audit.pipeline_execution_log', N'U') IS NULL
+CREATE TABLE audit.pipeline_execution_log
+(
+    execution_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    pipeline_name NVARCHAR(200) NOT NULL,
+    run_id NVARCHAR(100) NULL,
+    start_time DATETIME2 NOT NULL,
+    end_time DATETIME2 NULL,
+    status NVARCHAR(30) NOT NULL,
+    error_message NVARCHAR(MAX) NULL
+);
+GO
+
+IF OBJECT_ID(N'audit.load_control', N'U') IS NULL
+CREATE TABLE audit.load_control
+(
+    load_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    table_name NVARCHAR(200) NOT NULL,
+    source_count BIGINT NULL,
+    inserted_count BIGINT NULL,
+    updated_count BIGINT NULL,
+    rejected_count BIGINT NULL,
+    load_time DATETIME2 NOT NULL CONSTRAINT DF_audit_load_control_load_time DEFAULT SYSUTCDATETIME(),
+    load_status NVARCHAR(30) NOT NULL
+);
+GO
+
+IF OBJECT_ID(N'audit.rejected_records', N'U') IS NULL
+CREATE TABLE audit.rejected_records
+(
+    rejection_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    table_name NVARCHAR(200) NOT NULL,
+    rejection_reason NVARCHAR(1000) NULL,
+    rejected_at DATETIME2 NOT NULL CONSTRAINT DF_audit_rejected_records_rejected_at DEFAULT SYSUTCDATETIME()
+);
+GO
+
+SELECT TABLE_SCHEMA, TABLE_NAME
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = N'audit'
+ORDER BY TABLE_NAME;
+GO
