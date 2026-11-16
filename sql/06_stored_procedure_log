@@ -1,0 +1,30 @@
+CREATE OR ALTER PROCEDURE audit.usp_log_pipeline_failure
+    @PipelineName NVARCHAR(200),
+    @RunId NVARCHAR(100),
+    @ErrorMessage NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @LoggedAt DATETIME2(7) = SYSUTCDATETIME();
+
+    INSERT INTO audit.pipeline_execution_log
+    (
+        pipeline_name,
+        run_id,
+        start_time,
+        end_time,
+        status,
+        error_message
+    )
+    VALUES
+    (
+        @PipelineName,
+        @RunId,
+        @LoggedAt,
+        @LoggedAt,
+        'Failed',
+        @ErrorMessage
+    );
+END;
+GO
