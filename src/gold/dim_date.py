@@ -93,6 +93,23 @@ def validate_dim_date(dim_date_df: DataFrame) -> None:
         "Date dimension validation passed. Rows: %s",
         total_records,
     )
+    actual_min_date = dim_date_df.agg(
+        F.min("full_date")
+    ).first()[0]
+
+    actual_max_date = dim_date_df.agg(
+       F.max("full_date")
+    ).first()[0]
+
+    if str(actual_min_date) != START_DATE:
+        raise ValueError(
+            f"Unexpected minimum date: {actual_min_date}"
+        )
+
+    if str(actual_max_date) != END_DATE:
+        raise ValueError(
+            f"Unexpected maximum date: {actual_max_date}"
+        )
 
 
 def publish_dim_date(
