@@ -1,0 +1,46 @@
+/* Table inventory */
+SELECT TABLE_SCHEMA, TABLE_NAME
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA IN (N'staging', N'analytics', N'audit')
+ORDER BY TABLE_SCHEMA, TABLE_NAME;
+GO
+
+/* Row counts for the seven analytics tables */
+SELECT 'dim_country' AS table_name, COUNT_BIG(*) AS row_count FROM analytics.dim_country
+UNION ALL SELECT 'dim_date', COUNT_BIG(*) FROM analytics.dim_date
+UNION ALL SELECT 'dim_age_group', COUNT_BIG(*) FROM analytics.dim_age_group
+UNION ALL SELECT 'fact_covid_daily', COUNT_BIG(*) FROM analytics.fact_covid_daily
+UNION ALL SELECT 'fact_hospital_daily', COUNT_BIG(*) FROM analytics.fact_hospital_daily
+UNION ALL SELECT 'fact_hospital_weekly', COUNT_BIG(*) FROM analytics.fact_hospital_weekly
+UNION ALL SELECT 'fact_population_age', COUNT_BIG(*) FROM analytics.fact_population_age;
+GO
+
+/* COVID regional aggregates intentionally have a NULL country_key. */
+SELECT COUNT_BIG(*) AS regional_or_unmatched_geography_rows
+FROM analytics.fact_covid_daily
+WHERE country_key IS NULL;
+GO
+
+/* Foreign-key orphan checks (NULL country keys are excluded intentionally). */
+SELECT COUNT_BIG(*) AS covid_country_orphans
+FROM analytics.fact_covid_daily f
+LEFT JOIN analytics.dim_country d ON f.country_key = d.country_key
+WHERE f.country_key IS NOT NULL AND d.country_key IS NULL;
+GO
+
+SELECT COUNT_BIG(*) AS covid_date_orphans
+FROM analytics.fact_covid_daily f
+LEFT JOIN analytics.dim_date d ON f.date_key = d.date_key
+WHERE d.date_key IS NULL;
+GO
+
+SELECT COUNT_BIG(*) AS population_age_orphans
+FROM analytics.fact_population_age f
+LEFT JOIN analytics.dim_age_group d ON f.age_group_key = d.age_group_key
+WHERE d.age_group_key IS NULL;
+GO
+
+/* Load history */
+SELECT TOP (100) * FROM audit.pipeline_execution_log ORDER BY execution_id DESC;
+SELECT TOP (100) * FROM audit.load_control ORDER BY load_id DESC;
+GO
