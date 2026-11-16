@@ -1,0 +1,100 @@
+/* Staging tables receive the seven Databricks Gold exports.
+   Columns are nullable intentionally; validation is performed before warehouse loading. */
+
+IF OBJECT_ID(N'staging.dim_country', N'U') IS NULL
+CREATE TABLE staging.dim_country
+(
+    country_key NVARCHAR(64) NULL,
+    country_name NVARCHAR(255) NULL,
+    country_code_2_digit NVARCHAR(10) NULL,
+    country_code_3_digit NVARCHAR(10) NULL,
+    continent NVARCHAR(100) NULL,
+    population BIGINT NULL
+);
+GO
+
+IF OBJECT_ID(N'staging.dim_date', N'U') IS NULL
+CREATE TABLE staging.dim_date
+(
+    full_date DATE NULL,
+    date_key INT NULL,
+    year INT NULL,
+    quarter INT NULL,
+    month INT NULL,
+    month_name NVARCHAR(50) NULL,
+    day INT NULL,
+    day_name NVARCHAR(50) NULL,
+    week_of_year INT NULL,
+    day_of_week INT NULL
+);
+GO
+
+IF OBJECT_ID(N'staging.dim_age_group', N'U') IS NULL
+CREATE TABLE staging.dim_age_group
+(
+    age_group_key INT NULL,
+    age_indicator NVARCHAR(100) NULL,
+    age_group NVARCHAR(100) NULL
+);
+GO
+
+IF OBJECT_ID(N'staging.fact_covid_daily', N'U') IS NULL
+CREATE TABLE staging.fact_covid_daily
+(
+    country_key NVARCHAR(64) NULL,
+    date_key INT NULL,
+    country_code NVARCHAR(20) NULL,
+    geography_name NVARCHAR(255) NULL,
+    continent NVARCHAR(100) NULL,
+    geography_type NVARCHAR(100) NULL,
+    confirmed_cases BIGINT NULL,
+    new_deaths BIGINT NULL,
+    rate_14_day FLOAT NULL,
+    population BIGINT NULL
+);
+GO
+
+IF OBJECT_ID(N'staging.fact_hospital_daily', N'U') IS NULL
+CREATE TABLE staging.fact_hospital_daily
+(
+    country_key NVARCHAR(64) NULL,
+    date_key INT NULL,
+    country_name NVARCHAR(255) NULL,
+    indicator NVARCHAR(255) NULL,
+    value FLOAT NULL,
+    source NVARCHAR(255) NULL
+);
+GO
+
+IF OBJECT_ID(N'staging.fact_hospital_weekly', N'U') IS NULL
+CREATE TABLE staging.fact_hospital_weekly
+(
+    country_key NVARCHAR(64) NULL,
+    country_name NVARCHAR(255) NULL,
+    year_week NVARCHAR(20) NULL,
+    iso_year INT NULL,
+    iso_week INT NULL,
+    indicator NVARCHAR(255) NULL,
+    value FLOAT NULL,
+    source NVARCHAR(255) NULL
+);
+GO
+
+IF OBJECT_ID(N'staging.fact_population_age', N'U') IS NULL
+CREATE TABLE staging.fact_population_age
+(
+    country_key NVARCHAR(64) NULL,
+    age_group_key INT NULL,
+    geo_code NVARCHAR(50) NULL,
+    geography_type NVARCHAR(100) NULL,
+    year INT NULL,
+    population_percentage FLOAT NULL
+);
+GO
+
+SELECT TABLE_SCHEMA, TABLE_NAME, COUNT(*) AS column_count
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = N'staging'
+GROUP BY TABLE_SCHEMA, TABLE_NAME
+ORDER BY TABLE_NAME;
+GO
