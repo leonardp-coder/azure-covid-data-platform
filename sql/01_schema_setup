@@ -1,0 +1,19 @@
+/*
+Project: Azure COVID Data Platform
+Database: covid_analytics
+Run this script after connecting directly to the covid_analytics database.
+Azure SQL Database does not support switching databases with USE.
+*/
+
+IF SCHEMA_ID(N'staging') IS NULL EXEC(N'CREATE SCHEMA staging');
+GO
+IF SCHEMA_ID(N'analytics') IS NULL EXEC(N'CREATE SCHEMA analytics');
+GO
+IF SCHEMA_ID(N'audit') IS NULL EXEC(N'CREATE SCHEMA audit');
+GO
+
+SELECT name AS schema_name
+FROM sys.schemas
+WHERE name IN (N'staging', N'analytics', N'audit')
+ORDER BY name;
+GO
