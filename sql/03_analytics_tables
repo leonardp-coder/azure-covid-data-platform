@@ -1,0 +1,119 @@
+/* Analytics dimensional model. Dimensions are created before facts for FK dependencies. */
+
+IF OBJECT_ID(N'analytics.dim_country', N'U') IS NULL
+CREATE TABLE analytics.dim_country
+(
+    country_key NVARCHAR(64) NOT NULL,
+    country_name NVARCHAR(255) NULL,
+    country_code_2_digit NVARCHAR(10) NULL,
+    country_code_3_digit NVARCHAR(10) NULL,
+    continent NVARCHAR(100) NULL,
+    population BIGINT NULL,
+    CONSTRAINT PK_analytics_dim_country PRIMARY KEY (country_key)
+);
+GO
+
+IF OBJECT_ID(N'analytics.dim_date', N'U') IS NULL
+CREATE TABLE analytics.dim_date
+(
+    full_date DATE NOT NULL,
+    date_key INT NOT NULL,
+    year INT NULL,
+    quarter INT NULL,
+    month INT NULL,
+    month_name NVARCHAR(50) NULL,
+    day INT NULL,
+    day_name NVARCHAR(50) NULL,
+    week_of_year INT NULL,
+    day_of_week INT NULL,
+    CONSTRAINT PK_analytics_dim_date PRIMARY KEY (date_key),
+    CONSTRAINT UQ_analytics_dim_date_full_date UNIQUE (full_date)
+);
+GO
+
+IF OBJECT_ID(N'analytics.dim_age_group', N'U') IS NULL
+CREATE TABLE analytics.dim_age_group
+(
+    age_group_key INT NOT NULL,
+    age_indicator NVARCHAR(100) NULL,
+    age_group NVARCHAR(100) NULL,
+    CONSTRAINT PK_analytics_dim_age_group PRIMARY KEY (age_group_key)
+);
+GO
+
+IF OBJECT_ID(N'analytics.fact_covid_daily', N'U') IS NULL
+CREATE TABLE analytics.fact_covid_daily
+(
+    fact_covid_id BIGINT IDENTITY(1,1) NOT NULL,
+    country_key NVARCHAR(64) NULL, -- NULL is intentional for regional aggregate rows
+    date_key INT NOT NULL,
+    country_code NVARCHAR(20) NULL,
+    geography_name NVARCHAR(255) NOT NULL,
+    continent NVARCHAR(100) NULL,
+    geography_type NVARCHAR(100) NULL,
+    confirmed_cases BIGINT NULL,
+    new_deaths BIGINT NULL,
+    rate_14_day FLOAT NULL,
+    population BIGINT NULL,
+    CONSTRAINT PK_analytics_fact_covid_daily PRIMARY KEY (fact_covid_id),
+    CONSTRAINT FK_analytics_covid_country FOREIGN KEY (country_key) REFERENCES analytics.dim_country(country_key),
+    CONSTRAINT FK_analytics_covid_date FOREIGN KEY (date_key) REFERENCES analytics.dim_date(date_key),
+    CONSTRAINT UQ_analytics_covid_geography_date UNIQUE (geography_name, date_key)
+);
+GO
+
+IF OBJECT_ID(N'analytics.fact_hospital_daily', N'U') IS NULL
+CREATE TABLE analytics.fact_hospital_daily
+(
+    fact_hospital_daily_id BIGINT IDENTITY(1,1) NOT NULL,
+    country_key NVARCHAR(64) NOT NULL,
+    date_key INT NOT NULL,
+    country_name NVARCHAR(255) NULL,
+    indicator NVARCHAR(255) NULL,
+    value FLOAT NULL,
+    source NVARCHAR(255) NULL,
+    CONSTRAINT PK_analytics_fact_hospital_daily PRIMARY KEY (fact_hospital_daily_id),
+    CONSTRAINT FK_analytics_hospital_daily_country FOREIGN KEY (country_key) REFERENCES analytics.dim_country(country_key),
+    CONSTRAINT FK_analytics_hospital_daily_date FOREIGN KEY (date_key) REFERENCES analytics.dim_date(date_key)
+);
+GO
+
+IF OBJECT_ID(N'analytics.fact_hospital_weekly', N'U') IS NULL
+CREATE TABLE analytics.fact_hospital_weekly
+(
+    fact_hospital_weekly_id BIGINT IDENTITY(1,1) NOT NULL,
+    country_key NVARCHAR(64) NULL,
+    country_name NVARCHAR(255) NULL,
+    year_week NVARCHAR(20) NULL,
+    iso_year INT NULL,
+    iso_week INT NULL,
+    indicator NVARCHAR(255) NULL,
+    value FLOAT NULL,
+    source NVARCHAR(255) NULL,
+    CONSTRAINT PK_analytics_fact_hospital_weekly PRIMARY KEY (fact_hospital_weekly_id),
+    CONSTRAINT FK_analytics_hospital_weekly_country FOREIGN KEY (country_key) REFERENCES analytics.dim_country(country_key)
+);
+GO
+
+IF OBJECT_ID(N'analytics.fact_population_age', N'U') IS NULL
+CREATE TABLE analytics.fact_population_age
+(
+    fact_population_age_id BIGINT IDENTITY(1,1) NOT NULL,
+    country_key NVARCHAR(64) NULL,
+    age_group_key INT NOT NULL,
+    geo_code NVARCHAR(50) NULL,
+    geography_type NVARCHAR(100) NULL,
+    year INT NULL,
+    population_percentage FLOAT NULL,
+    CONSTRAINT PK_analytics_fact_population_age PRIMARY KEY (fact_population_age_id),
+    CONSTRAINT FK_analytics_population_country FOREIGN KEY (country_key) REFERENCES analytics.dim_country(country_key),
+    CONSTRAINT FK_analytics_population_age_group FOREIGN KEY (age_group_key) REFERENCES analytics.dim_age_group(age_group_key)
+);
+GO
+
+SELECT TABLE_SCHEMA, TABLE_NAME, COUNT(*) AS column_count
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = N'analytics'
+GROUP BY TABLE_SCHEMA, TABLE_NAME
+ORDER BY TABLE_NAME;
+GO
